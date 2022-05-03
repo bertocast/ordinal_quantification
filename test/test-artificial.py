@@ -10,7 +10,7 @@ from base import UsingClassifiers
 from classify_and_count.cc import CC, PCC
 from classify_and_count.ac import AC, PAC
 from ordinal.ac import ACOrdinal
-from distribution_matching.energy import EDX, EDy
+from distribution_matching.energy import EDX, EDy, CvMy
 from distribution_matching.df import HDX, HDy
 from ordinal.pdf import PDFOrdinaly
 from estimators import CV_estimator, FrankAndHallMonotoneClassifier, FrankAndHallTreeClassifier
@@ -24,42 +24,42 @@ from sklearn.linear_model import LogisticRegression
 import time
 
 
-def create_bags(X, y, n=1001, rng=None):
-    if isinstance(rng, (numbers.Integral, np.integer)):
-        rng = np.random.RandomState(rng)
-    if not isinstance(rng, np.random.RandomState):
+def create_bags(x, y, n=1001, randomg=None):
+    if isinstance(randomg, (numbers.Integral, np.integer)):
+        randomg = np.random.RandomState(randomg)
+    if not isinstance(randomg, np.random.RandomState):
         raise ValueError("Invalid random generaror object")
 
-    X, y = check_X_y(X, y)
+    x, y = check_X_y(x, y)
     classes = np.unique(y)
-    n_classes = len(classes)
-    m = len(X)
+    nclasses = len(classes)
+    nexamples = len(x)
 
     for i in range(n):
         # Kraemer method:
 
         # to soft limits
-        low = round(m * 0.05)
-        high = round(m * 0.95)
+        low = round(nexamples * 0.05)
+        high = round(nexamples * 0.95)
 
-        ps = rng.randint(low, high, n_classes - 1)
-        ps = np.append(ps, [0, m])
+        ps = randomg.randint(low, high, nclasses - 1)
+        ps = np.append(ps, [0, nexamples])
         ps = np.diff(np.sort(ps))  # number of samples for each class
-        prev = ps / m  # to obtain prevalences
-        idxs = []
+        prev = ps / nexamples  # to obtain prevalences
+        indexes = []
         for n, p in zip(classes, ps.tolist()):
             if p != 0:
-                idx = rng.choice(np.where(y == n)[0], p, replace=True)
-                idxs.append(idx)
+                idx = randomg.choice(np.where(y == n)[0], p, replace=True)
+                indexes.append(idx)
 
-        idxs = np.concatenate(idxs)
-        yield X[idxs], y[idxs], prev, idxs
+        indexes = np.concatenate(indexes)
+        yield x[indexes], y[indexes], prev, indexes
 
 
 # MAIN
 n_classes = 5
-nbags = 300 # 50 * n_classes
-mu_sep = 3 #3
+nbags = 300  # 50 * n_classes
+mu_sep = 3  # 3
 sigma = 1.5
 
 seed = 42
@@ -68,8 +68,8 @@ rng = np.random.RandomState(seed)
 estimator_grid = {'C': [0.001, 0.01, 0.1, 1, 10, 100, 1000]}
 estimator = LogisticRegression(random_state=seed, max_iter=1000, solver="liblinear")
 
-# decomposer = "Monotone"
-decomposer = "FHTree"
+decomposer = "Monotone"
+#  decomposer = "FHTree"
 
 values = [50, 100, 200, 500, 1000, 2000]
 
@@ -80,8 +80,9 @@ cc = CC()
 pcc = PCC()
 edx = EDX()
 hdx = HDX(n_bins=16)
-ac = AC()
+ac = AC(distance='L2')
 acord = ACOrdinal()
+cvmy_euc = CvMy(distance=euclidean_distances)
 edy_emd = EDy(distance=emd_distances)
 edy_euc = EDy(distance=euclidean_distances)
 hdy = HDy(n_bins=8)
@@ -90,9 +91,11 @@ pdfordy_emd = PDFOrdinaly(n_bins=32, distance='EMD')
 pdfordy_l2 = PDFOrdinaly(n_bins=4, distance='L2')
 
 #   methods
-methods = [ac, acord, cc, edx, edy_emd, edy_euc, hdx, hdy, pac, pcc, pdfordy_emd, pdfordy_l2]
-methods_names = ['AC', 'ACOrd', 'CC', 'EDX', 'EDy_emd', 'EDy_euc', 'HDX', 'HDy', 'PAC', 'PCC', 'PDFOrdy_emd', 'PDFOrdy_l2']
+methods = [ac, acord, cc, cvmy_euc, edx, edy_emd, edy_euc, hdx, hdy, pac, pcc, pdfordy_emd, pdfordy_l2]
+methods_names = ['AC', 'ACOrd', 'CC', 'CvMY_euc',
+                 'EDX', 'EDy_emd', 'EDy_euc', 'HDX', 'HDy', 'PAC', 'PCC', 'PDFOrdy_emd', 'PDFOrdy_l2']
 markers = ['-s', '--s', '-x', '--^', '-*', '-o', '--o', '--*', '-D', ':s', '--x', '--D', ':D']
+
 #   to store all the results
 results = np.zeros((len(methods), len(values)))
 
@@ -118,11 +121,12 @@ for k in range(len(values)):
         X_test = []
         y_test = []
         for i in range(n_classes):
-            mu = mu_sep * (i + 1)
 
-            training_examples = sigma * rng.randn(n_train) + mu
+            mu = mu_sep * (i + 1)  # mu of class i
 
-            X_train = np.append(X_train, training_examples)
+            examples_class_i = sigma * rng.randn(n_train) + mu  # training examples of class i
+
+            X_train = np.append(X_train, examples_class_i)
             y_train = np.append(y_train, (i + 1) * np.ones(n_train))
             if i < n_classes / 2:
                 y_train_binary = np.append(y_train_binary, -np.ones(n_train))
@@ -147,16 +151,16 @@ for k in range(len(values)):
         best_lr = gs.best_estimator_
 
         # estimator for estimating the training distribution, CV 20
-        folds = 20 #np.min([50, np.min(np.unique(y_train, return_counts=True)[1])])
+        folds = 20
         skf_train = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
 
-        if decomposer == "Monotone":  #NUEVO
+        estimator_train = None
+        if decomposer == "Monotone":
             estimator_train = CV_estimator(estimator=FrankAndHallMonotoneClassifier(estimator=best_lr, n_jobs=None),
                                            n_jobs=None, cv=skf_train)
         elif decomposer == "FHTree":
             estimator_train = CV_estimator(estimator=FrankAndHallTreeClassifier(estimator=best_lr, n_jobs=None),
                                            n_jobs=None, cv=skf_train)
-
 
         # estimator_train = FrankAndHallMonotoneClassifier(estimator=estimator, n_jobs=None)
         estimator_train.fit(X_train, y_train)
@@ -169,7 +173,8 @@ for k in range(len(values)):
             else:
                 method.fit(X=X_train, y=y_train)
 
-        if decomposer == "Monotone":  #NEW
+        estimator_test = None
+        if decomposer == "Monotone":
             estimator_test = FrankAndHallMonotoneClassifier(estimator=best_lr, n_jobs=-1)
         elif decomposer == "FHTree":
             estimator_test = FrankAndHallTreeClassifier(estimator=best_lr, n_jobs=-1)
@@ -180,11 +185,11 @@ for k in range(len(values)):
 
         print('Test', end=' ')
         for n_bag, (pred_test_, y_test_, prev_true, idxs) in enumerate(
-                create_bags(X=predictions_test, y=y_test, n=nbags, rng=seed)):
+                create_bags(x=predictions_test, y=y_test, n=nbags, randomg=seed)):
 
             for nmethod, method in enumerate(methods):
 
-                # print(nmethod+1, end='')
+                # print(nmethod+1, end='')
 
                 t = time.process_time()
                 if isinstance(method, UsingClassifiers):
@@ -199,7 +204,7 @@ for k in range(len(values)):
                 all_results[nmethod, rep * nbags + n_bag] = error
                 results[nmethod, k] = results[nmethod, k] + error
 
-    print('Time: ', execution_times/(nreps * nbags) )
+    print('Time: ', execution_times/(nreps * nbags))
 
     name_file = "../results/allresults-test-artificial-sep" + str(mu_sep) + "-rep" + str(nreps) + "-value" + str(
         values[k]) + "_" + decomposer + ".txt"
@@ -214,8 +219,6 @@ for k in range(len(values)):
                 file_all.write('%.5f, ' % all_results[n_method, nrep * nbags + n_bag])
             file_all.write('\n')
 
-    all_results = np.zeros((len(methods) * nreps * nbags, 2))
-
     file_all.close()
 
 
@@ -223,6 +226,7 @@ results = results / (nreps * nbags)
 
 
 name_file = "../results/avgresults-test-artificial-sep" + str(mu_sep) + "-rep" + str(nreps) + ".txt"
+
 file_avg = open(name_file, 'w')
 for index, m in enumerate(methods_names):
     file_avg.write('MEAN %6s:' % m)
@@ -244,6 +248,3 @@ plt.show()
 name_file = "../results/fig_test_mu_sep_" + str(mu_sep) + ".png"
 plt.savefig(name_file)
 plt.close()
-
-
-
